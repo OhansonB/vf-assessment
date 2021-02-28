@@ -1,0 +1,200 @@
+# This CloudFormation deploys an API Gateway api with one function: /getVanityNumbers. This function returns the five
+# most recent records from the DynamoDB table which holds the records of all callers to the vanity number generator
+# Author: Oliver Hanson-Bragg
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: "OLIVER HB - Voice Foundry Technical Demo - API Gateway"
+Parameters:
+  pEnvironmentLowerCase:
+    Type: String
+    AllowedValues: ["dev", "test", "prod"]
+    Default: dev
+    Description: Environment label to apply to resources naming, lowercase
+
+  pClientLowerCase:
+    Type: String
+    Default: voicefoundry
+    Description: Customer/Client identifier
+  
+Resources:
+  apiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "api-${pClientLowerCase}-vannums-${AWS::Region}-${pEnvironmentLowerCase}"
+      Body:
+        swagger: 2.0
+        info:
+          version: 1.0.0
+          title: Voice Foundry assessment API Gateway
+        paths:
+          /getVanityNumbers:
+            get:
+              description: Retrieves the vanity numbers of the five most recent callers
+              consumes:
+                - application/json
+              produces:
+                - application/json
+              security:
+                - CognitoAuthorizer: []
+              responses:
+                "200":
+                  description: "200 response"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+                "401":
+                  description: "401 response: unauthorised client"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+                "500":
+                  description: "500 response: internal server error"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+              x-amazon-apigateway-integration:
+                responses:
+                  default:
+                    statusCode: 200
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                  "401":
+                    statusCode: 401
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                  "500":
+                    statusCode: 500
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${apiGetRecordsFunction.Arn}/invocations"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "AWS_PROXY"
+            options:
+              consumes:
+                - application/json
+              produces:
+                - application/json
+              responses:
+                "200":
+                  description: "200 response"
+                  schema:
+                    $ref: "#/definitions/Empty"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+                    Access-Control-Allow-Methods:
+                      type: "string"
+                    Access-Control-Allow-Headers:
+                      type: "string"
+                "401":
+                  description: "401 response"
+                  schema:
+                    $ref: "#/definitions/Empty"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+                    Access-Control-Allow-Methods:
+                      type: "string"
+                    Access-Control-Allow-Headers:
+                      type: "string"
+                "500":
+                  description: "500 response"
+                  schema:
+                    $ref: "#/definitions/Empty"
+                  headers:
+                    Access-Control-Allow-Origin:
+                      type: "string"
+                    Access-Control-Allow-Methods:
+                      type: "string"
+                    Access-Control-Allow-Headers:
+                      type: "string"
+              x-amazon-apigateway-integration:
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseParameters:
+                      method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+                      method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+                      method.response.header.Access-Control-Allow-Origin: "'*'"
+                requestTemplates:
+                  application/json: "{\"statusCode\": 200}"
+                passthroughBehavior: "when_no_match"
+                type: "mock"
+
+  apiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      Description:
+        !Join
+          - ""
+          - - !Sub "${pEnvironmentLowerCase} deployment for API Gateway "
+            - !Ref apiGateway
+      RestApiId: !Ref apiGateway
+      StageName: !Sub "${pEnvironmentLowerCase}"
+
+
+  apiGetRecordsFunction:
+    Type: "AWS::Serverless::Function"
+    Properties:
+      FunctionName: !Sub "lmbd-${pClientLowerCase}-vannums-api-${pEnvironmentLowerCase}-${AWS::Region}-getRecords"
+      Handler: getRecords.lambda_handler
+      Runtime: python3.8
+      Timeout: 180
+      CodeUri: ./../../../src/lambda/api/getRecords.py
+      Environment:
+        Variables:
+          ddbTable: 
+            Fn::ImportValue:
+              !Sub "${pEnvironmentLowerCase}-recordsDdbName"
+
+      Policies:
+        - AWSLambdaRole
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: "Allow"
+              Action:
+                - "dynamoDB:Scan"
+              Resource: 
+                Fn::ImportValue:
+                  !Sub "${pEnvironmentLowerCase}-recordsDdbArn"
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: "Allow"
+              Action:
+                - "logs:CreateLogGroup"
+              Resource: "arn:aws:logs:*:*:*"
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: "Allow"
+              Action:
+                - "logs:CreateLogStream"
+                - "logs:PutLogEvents"
+              Resource: "*"
+
+  apiGetRecordsFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 7
+      LogGroupName: !Join
+        - ''
+        - - "/aws/lambda/"
+          - !Ref apiGetRecordsFunction
+
+  apiGetRecordsFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref apiGetRecordsFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn:
+        !Join
+          - ""
+          - - "arn:aws:execute-api:"
+            - !Ref AWS::Region
+            - ":"
+            - !Ref AWS::AccountId
+            - ":"
+            - !Ref apiGateway
+            - "/*"

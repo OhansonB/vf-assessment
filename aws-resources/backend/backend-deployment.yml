@@ -1,0 +1,182 @@
+# This CloudFormation template deploys a Lambda function and dynamoDB table to generate and store vanity numbers, and also creates
+# a custom resource which puts an AWS Connect contact flow in the target AWS Connect instance.
+# Author: Oliver Hanson-Bragg
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: "OLIVER HB - Voice Foundry Technical Demo - Contact Flow and Backend"
+Parameters:
+  pEnvironmentLowerCase:
+    Type: String
+    AllowedValues: ["dev", "test", "prod"]
+    Default: dev
+    Description: Environment label to apply to resources naming, lowercase
+
+  pClientLowerCase:
+    Type: String
+    Default: voicefoundry
+    Description: Customer/Client identifier
+
+  pConnectInstanceArn:
+    Type: String
+    Description: The Arn of the AWS Connect Instance into which you are integrating this application
+  
+
+Resources:
+  ddbVanityNumbers:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      TableName: !Sub "ddb-connect-${pClientLowerCase}-${pEnvironmentLowerCase}-${AWS::Region}-vanityNumbers"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: "true"
+      AttributeDefinitions:
+        - AttributeName: "contactid"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "contactid"
+          KeyType: "HASH"
+
+  generateVanityNumberFunction:
+    Type: "AWS::Serverless::Function"
+    Properties:
+      FunctionName: !Sub "lmbd-${pClientLowerCase}-vannums-connect-${pEnvironmentLowerCase}-${AWS::Region}-genVanNums"
+      Handler: generateVanity.lambda_handler
+      Runtime: python3.6
+      Timeout: 180
+      CodeUri: ./../../src/lambda/connect/generateVanity.py
+      Environment:
+        Variables:
+          ddbTable: !Ref ddbVanityNumbers
+      Policies:
+        - AWSLambdaRole
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: "Allow"
+              Action:
+                - "dynamoDB:UpdateItem"
+              Resource: !GetAtt ddbVanityNumbers.Arn
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: "Allow"
+              Action:
+                - "logs:CreateLogGroup"
+              Resource: "arn:aws:logs:*:*:*"
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: "Allow"
+              Action:
+                - "logs:CreateLogStream"
+                - "logs:PutLogEvents"
+              Resource: "*"
+  
+  processDictionaryFileFunction:
+    Type: "AWS::Serverless::Function"
+    Properties:
+      FunctionName: !Sub "lmbd-${pClientLowerCase}-vannums-misc-${pEnvironmentLowerCase}-${AWS::Region}-processDictionary"
+      Handler: processDictionary.lambda_handler
+      Runtime: python3.6
+      Timeout: 180
+      CodeUri: ./../../src/lambda/misc/processDictionary.py
+      Environment:
+        Variables:
+          S3BucketLocation: !Ref dictionaryBucket
+          S3DictionaryKey: "dictionary.txt"
+      Policies:
+        - AWSLambdaRole
+        - Version: '2012-10-17'
+          Statement: 
+            - Effect: "Allow"
+              Action: s3:ListBucket
+              Resource: !GetAtt dictionaryBucket.Arn
+          Statement:
+            - Effect: "Allow"
+              Action:
+                - "s3:GetObject"
+                - "s3:PutObject"
+              Resource: 
+                - !Join ["", [!GetAtt dictionaryBucket.Arn, "/*"]]
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: "Allow"
+              Action:
+                - "logs:CreateLogGroup"
+              Resource: "arn:aws:logs:*:*:*"
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: "Allow"
+              Action:
+                - "logs:CreateLogStream"
+                - "logs:PutLogEvents"
+              Resource: "*"
+
+  putConnectContactFlowFunction:
+    Type: "AWS::Serverless::Function"
+    Properties:
+      FunctionName: !Sub "lmbd-${pClientLowerCase}-vannums-misc-${pEnvironmentLowerCase}-${AWS::Region}-putContactFlow"
+      Handler: putContactFlow.lambda_handler
+      Runtime: python3.6
+      Timeout: 180
+      CodeUri: ./../../src/lambda/misc/putContactFlow.py
+      Policies:
+        - AWSLambdaRole
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: "Allow"
+              Action:
+                - "connect:CreateContactFlow"
+              Resource: 
+                - !Ref pConnectInstanceArn
+                - !Sub "${pConnectInstanceArn}/contact-flow/*"
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: "Allow"
+              Action:
+                - "logs:CreateLogGroup"
+              Resource: "arn:aws:logs:*:*:*"
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: "Allow"
+              Action:
+                - "logs:CreateLogStream"
+                - "logs:PutLogEvents"
+              Resource: "*"
+  
+  invokePutConnectContactFlowFunction:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt putConnectContactFlowFunction.Arn
+      InstanceArn: !Ref pConnectInstanceArn
+      LambdaFunctionArn: !GetAtt generateVanityNumberFunction.Arn
+      Environment: !Ref pEnvironmentLowerCase
+
+  dictionaryBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "s3-${pClientLowerCase}-vannums-${pEnvironmentLowerCase}-${AWS::Region}-dictionary"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+        - Id: deletion-after-7-days
+          Status: Enabled
+          ExpirationInDays: 365
+
+Outputs:
+  ddbTableArn:
+    Description: Arn of the DDB table used to hold IVR records
+    Value: !GetAtt ddbVanityNumbers.Arn
+    Export:
+      Name: !Sub "${pEnvironmentLowerCase}-recordsDdbArn"
+  ddbTableName:
+    Description: Name of the DDB table used to hold IVR records
+    Value: !Ref ddbVanityNumbers
+    Export:
+      Name: !Sub "${pEnvironmentLowerCase}-recordsDdbName"
+    

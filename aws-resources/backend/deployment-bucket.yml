@@ -1,0 +1,38 @@
+# This CloudFormation template creates an S3 bucket which is used to store deployment packages for the rest of this solutions
+# components.
+# Author: Oliver Hanson-Bragg
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: "OLIVER HB - Voice Foundry Technical Demo - Deployment Bucket"
+Parameters:
+  pEnvironmentLowerCase:
+    Type: String
+    AllowedValues: ["dev", "test", "prod"]
+    Default: dev
+    Description: Environment label to apply to resources naming, lowercase
+
+  pClientLowerCase:
+    Type: String
+    Default: voicefoundry
+    Description: Customer/Client identifier
+ 
+Resources:
+  deploymentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "s3-${pClientLowerCase}-vannums-${pEnvironmentLowerCase}-${AWS::Region}-deployment"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+        - Id: deletion-after-1-year
+          Status: Enabled
+          ExpirationInDays: 365
+

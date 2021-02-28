@@ -1,0 +1,81 @@
+# Deploys a CloudFront distribution and associated S3 bucket for the webstie used to display the content of the DynamoDB table
+# which stores historically generated vanity numbers.
+# Author: Oliver Hanson-Bragg
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: "OLIVER HB - Voice Foundry Technical Demo - CloudFront Distribution"
+Parameters:
+  pEnvironmentLowerCase:
+    Type: String
+    AllowedValues: ["dev", "test", "prod"]
+    Default: dev
+    Description: Environment label to apply to resources naming, lowercase
+
+  pClientLowerCase:
+    Type: String
+    Default: voicefoundry
+    Description: Customer/Client identifier
+ 
+Resources:
+  originBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "s3-${pClientLowerCase}-vannums-${pEnvironmentLowerCase}-${AWS::Region}-webapp"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+        - Id: deletion-after-1-year
+          Status: Enabled
+          ExpirationInDays: 365
+
+  cloudFrontBucketPolicy: 
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref originBucket
+      PolicyDocument:
+        Statement:
+          - Action:
+              - s3:GetObject
+            Effect: "Allow"
+            Principal:
+              AWS:  !Join ["", ["arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ", !Ref originAccessID]]
+            Resource: !Join ["", ["arn:aws:s3:::", !Ref originBucket, "/*"]]
+
+  originAccessID:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Join [' ', [WebApp CloudFront Identity, !Ref pClientLowerCase]]
+
+  cloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        DefaultRootObject: index.html
+        Logging:
+          IncludeCookies: false
+          Bucket: !Join ['', [!Ref originBucket, '.s3.amazonaws.com']]
+          Prefix: logs
+        DefaultCacheBehavior:
+          DefaultTTL: 31536000
+          TargetOriginId: !Sub "WebAppOrigin${pClientLowerCase}${pEnvironmentLowerCase}"
+          ViewerProtocolPolicy: https-only
+          ForwardedValues:
+            QueryString: false
+        Enabled: true
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        Origins:
+        - DomainName: !GetAtt originBucket.DomainName
+          Id: !Sub "WebAppOrigin${pClientLowerCase}${pEnvironmentLowerCase}"
+          S3OriginConfig:
+            OriginAccessIdentity: !Join ['', ['origin-access-identity/cloudfront/', !Ref originAccessID]]
