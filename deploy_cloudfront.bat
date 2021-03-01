@@ -6,7 +6,7 @@ cd aws-resources/frontend
 rem Set variables from command line arguments
 rem e.g. ./deploy_backend.bat {region} {environment(dev/test/prod)}
 set region=%1
-set clientName=vf
+set clientName=vf1
 set environment=%2
 
 rem Package and deploy cloudfront-deployment.yml then tidy up

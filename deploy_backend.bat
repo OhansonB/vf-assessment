@@ -6,7 +6,7 @@ cd aws-resources/backend
 rem Set variables from command line arguments
 rem e.g. ./deploy_backend.bat {region} {environment(dev/test/prod)} {connectInstanceArn}
 set region=%1
-set clientName=vf
+set clientName=vf1
 set environment=%2
 set connectInstanceArn=%3
 
